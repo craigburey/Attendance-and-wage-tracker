@@ -151,3 +151,32 @@ app.post('/api/payroll', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+const express = require('express');
+const path = require('path');
+const sqlite3 = require('sqlite3').verbose();
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+// --- MIDDLEWARE ---
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// --- SERVE STATIC FILES FROM 'public' ---
+app.use(express.static(path.join(__dirname, 'public')));
+
+// --- CONNECT TO SQLITE ---
+const db = new sqlite3.Database('attendance.db', (err) => {
+  if (err) console.error('DB connection error:', err);
+  else console.log('Connected to SQLite database');
+});
+
+// --- TEST ENDPOINT ---
+app.get('/ping', (req, res) => {
+  res.send('Server is running!');
+});
+
+// --- START SERVER ---
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
