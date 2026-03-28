@@ -21,7 +21,7 @@ hr { margin:5px 0; border:1px solid #ccc; }
 .top-bar button { margin:5px; flex:1 1 40%; max-width:150px; }
 .worker-entry { border:1px solid #ccc; padding:5px; margin:3px 0; display:flex; justify-content:space-between; align-items:center; }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.33.1/dist/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 <header>
@@ -32,6 +32,7 @@ hr { margin:5px 0; border:1px solid #ccc; }
 <button onclick="openPayCycle()">Pay Cycle</button>
 <button onclick="openRunningTotals()">Running Totals</button>
 <button onclick="openAttendanceHistory()">Attendance History</button>
+<button onclick="openPayrollHistory()">Payroll History</button>
 </div>
 
 <!-- ATTENDANCE TABLE -->
@@ -66,17 +67,12 @@ hr { margin:5px 0; border:1px solid #ccc; }
 </div>
 </div>
 
-<!-- PAY CYCLE MODAL -->
+<!-- PAY CYCLE -->
 <div id="payCycleModal" class="modal">
 <div class="modal-content">
 <h3>Pay Cycle</h3>
 <div id="payCycleList"></div>
-<hr>
-<h4>Generate Payroll Report</h4>
-<button onclick="generatePayrollReport()">Generate Report</button>
-<div id="payCycleReport"></div>
-<hr>
-<button onclick="finalizePayCycle()">Finalize Pay Cycle</button>
+<button onclick="finalizePayCycle()">Close Pay Cycle</button>
 <button onclick="closePayCycle()">Close</button>
 </div>
 </div>
@@ -100,15 +96,25 @@ hr { margin:5px 0; border:1px solid #ccc; }
 </div>
 </div>
 
-<script>
-// --- SUPABASE INIT ---
-const supabaseUrl = 'https://bjuqcpbpujqzdqffrgxi.supabase.co';
-const supabaseKey = 'sb_publishable_e6fj_76zFVKYOcwFvyjzNw_5_52Gyc4';
-const supabase = Supabase.createClient(supabaseUrl, supabaseKey);
+<!-- PAYROLL HISTORY -->
+<div id="payrollHistoryModal" class="modal">
+<div class="modal-content">
+<h3>Payroll History</h3>
+<select id="payrollSelect" onchange="loadPayrollReport()"></select>
+<div id="payrollReport"></div>
+<button onclick="closePayrollHistory()">Close</button>
+</div>
+</div>
 
+<script>
 const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 let workers=[];
 let editIndex=null;
+
+// --- SUPABASE INIT ---
+const supabaseUrl = 'https://bjuqcpbpujqzdqffrgxi.supabase.co';
+const supabaseKey = 'sb_publishable_e6fj_76zFVKYOcwFvyjzNw_5_52Gyc4';
+const supabaseClient = supabase.createClient(supabaseUrl, supabaseKey);
 
 // --- DATE HELPERS ---
 function getMonday(d){
@@ -119,84 +125,55 @@ function getMonday(d){
  return m;
 }
 
-// --- LOAD / SAVE ---
+// --- LOAD DATA ---
 async function loadData(){
-  let { data, error } = await supabase.from('workers').select('*').order('name');
-  if(error){ console.error(error); workers=[]; return; }
-  workers = data.map(w=>{ w.attendance = w.attendance || Array(7).fill('Absent'); return w; });
-}
-
-// --- SAVE WORKER ---
-async function saveWorkerToDB(worker){
-  const { data, error } = await supabase.from('workers').upsert(worker, { onConflict:['id'] });
-  if(error) console.error(error);
-}
-
-// --- AUTO WEEK CHECK & SAVE PREVIOUS WEEK ---
-async function checkWeekRollover(){
-  let { data: lastWeekData } = await supabase.from('attendanceHistory').select('week').order('week',{ascending:false}).limit(1);
-  let lastWeek = lastWeekData.length ? new Date(lastWeekData[0].week) : null;
-  let currentMonday = getMonday(new Date());
-
-  if(!lastWeek || lastWeek.getTime()!==currentMonday.getTime()){
-    // Save previous week if exists
-    if(lastWeek){
-      let snapshot = { week:lastWeek.toISOString(), workers: JSON.parse(JSON.stringify(workers)) };
-      const { error } = await supabase.from('attendanceHistory').insert([snapshot]);
-      if(error) console.error(error);
-    }
-    // Reset attendance
-    workers.forEach(w=>w.attendance = Array(7).fill('Absent'));
-    // Save reset workers to DB
-    for(const w of workers){ await saveWorkerToDB(w); }
-  }
-}
-
-// --- RENDER ATTENDANCE ---
-function renderAttendance(){
- let tbody=document.querySelector('#attendanceTable tbody');
- tbody.innerHTML='';
- let totalDays=0;
- workers.forEach((w,i)=>{
-  if(!w.attendance) w.attendance=Array(7).fill('Absent');
-  let row=document.createElement('tr');
-  let daysHtml=w.attendance.map((s,d)=>`<td><button class="${s.toLowerCase()}" onclick="toggleAttendance(${i},${d})">${s}</button></td>`).join('');
-  let t=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
-  totalDays+=t;
-  row.innerHTML=`<td>${i+1}</td><td>${w.name}</td>${daysHtml}<td>${t}</td>`;
-  tbody.appendChild(row);
- });
- document.getElementById('totalDays').innerText='Total Days: '+totalDays.toFixed(1);
-}
-
-// --- ATTENDANCE TOGGLE ---
-function toggleAttendance(i,d){
- const s=['Full','Half','Absent'];
- workers[i].attendance[d]=s[(s.indexOf(workers[i].attendance[d])+1)%3];
+ let { data, error } = await supabaseClient.from('workers').select('*');
+ if (error) { console.error(error); return; }
+ workers = data.map(w=>({
+   ...w,
+   attendance: w.attendance || Array(7).fill('Absent')
+ }));
  renderAttendance();
 }
 
-// --- WORKER MODAL ---
-function openWorkerModal(){
- editIndex=null;
- document.getElementById('workerName').value='';
- document.getElementById('payType').value='daily';
- document.getElementById('rate').value='';
- document.getElementById('balance').value='';
+// --- SAVE WORKER ---
+async function saveWorker(){
+ let name = document.getElementById('workerName').value;
+ if(!name){ alert('Enter worker name'); return; }
+ let payType = document.getElementById('payType').value;
+ let rate = parseFloat(document.getElementById('rate').value) || 0;
+ let openingBalance = parseFloat(document.getElementById('balance').value) || 0;
+
+ if(editIndex!==null){
+   let worker = workers[editIndex];
+   let { error } = await supabaseClient.from('workers')
+       .update({ name, payType, rate, openingBalance })
+       .eq('id', worker.id);
+   if(error){ console.error(error); return; }
+   workers[editIndex] = {...worker, name, payType, rate, openingBalance};
+ } else {
+   let { data, error } = await supabaseClient.from('workers')
+       .insert([{ name, payType, rate, openingBalance, attendance: Array(7).fill('Absent') }])
+       .select();
+   if(error){ console.error(error); return; }
+   workers.push(data[0]);
+ }
+
  renderWorkerList();
- document.getElementById('workerModal').style.display='block';
+ renderAttendance();
 }
 
+// --- RENDER WORKERS ---
 function renderWorkerList(){
  let list=document.getElementById('workerList'); list.innerHTML='';
  workers.forEach((w,i)=>{
-  let div=document.createElement('div'); div.className='worker-entry';
-  div.innerHTML=`<span>${w.name}</span>
-  <span>
-    <button onclick="editWorker(${i})">Edit</button>
-    <button onclick="deleteWorker(${i})">Delete</button>
-  </span>`;
-  list.appendChild(div);
+   let div=document.createElement('div'); div.className='worker-entry';
+   div.innerHTML = `<span>${w.name}</span>
+   <span>
+     <button onclick="editWorker(${i})">Edit</button>
+     <button onclick="deleteWorker(${i})">Delete</button>
+   </span>`;
+   list.appendChild(div);
  });
 }
 
@@ -209,137 +186,46 @@ function editWorker(i){
  document.getElementById('balance').value=w.openingBalance||0;
 }
 
-function closeWorkerModal(){ document.getElementById('workerModal').style.display='none'; }
-
-async function saveWorker(){
- let name=document.getElementById('workerName').value;
- if(!name){ alert('Enter worker name'); return;}
- let data={
-  id: editIndex!==null ? workers[editIndex].id : undefined,
-  name:name,
-  payType:document.getElementById('payType').value,
-  rate:parseFloat(document.getElementById('rate').value)||0,
-  openingBalance:parseFloat(document.getElementById('balance').value)||0,
-  attendance:editIndex!==null?workers[editIndex].attendance:Array(7).fill('Absent')
- };
- if(editIndex!==null){ workers[editIndex]=data; }
- else { workers.push(data); }
- await saveWorkerToDB(data);
- renderWorkerList(); renderAttendance();
-}
-
-// --- DELETE WORKER ---
 async function deleteWorker(i){
  if(confirm('Delete worker?')){
-   await supabase.from('workers').delete().eq('id', workers[i].id);
-   workers.splice(i,1); renderWorkerList(); renderAttendance();
+   let worker = workers[i];
+   let { error } = await supabaseClient.from('workers').delete().eq('id', worker.id);
+   if(error){ console.error(error); return; }
+   workers.splice(i,1);
+   renderWorkerList();
+   renderAttendance();
  }
 }
 
-// --- PAY CYCLE ---
-function openPayCycle(){
- let div=document.getElementById('payCycleList'); div.innerHTML='';
+function closeWorkerModal(){ document.getElementById('workerModal').style.display='none'; }
+function openWorkerModal(){ editIndex=null; document.getElementById('workerName').value=''; document.getElementById('payType').value='daily'; document.getElementById('rate').value=''; document.getElementById('balance').value=''; renderWorkerList(); document.getElementById('workerModal').style.display='block'; }
+
+// --- ATTENDANCE ---
+function renderAttendance(){
+ let tbody=document.querySelector('#attendanceTable tbody');
+ tbody.innerHTML=''; let totalDays=0;
  workers.forEach((w,i)=>{
-  let daysWorked=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
-  let deductions=w.deductions||0;
-  let total=w.openingBalance+daysWorked*w.rate-deductions;
-  w.totalOwed=total; w.paid=w.partial?w.paid||0:total; w.carried=total-w.paid;
-  let sec=document.createElement('div');
-  sec.innerHTML=`
-  <h4>${w.name}</h4>
-  Days Worked: ${daysWorked}<br>
-  Rate: ${w.rate}<br>
-  Opening Balance: ${w.openingBalance.toFixed(2)}<br>
-  Deductions / Advances: <input type="number" value="${deductions}" onchange="updateDeductions(${i},this.value)"><br>
-  Total Owed: ${total.toFixed(2)}<br>
-  Partial Payment: <input type="checkbox" ${w.partial?'checked':''} onchange="togglePartial(${i},this.checked)"><br>
-  <div id="partialBox${i}" style="display:${w.partial?'block':'none'}">
-    Paid Amount: <input type="number" value="${w.paid}" onchange="updatePaid(${i},this.value)">
-  </div>
-  Carried Balance: ${w.carried.toFixed(2)}<hr>
-  `;
-  div.appendChild(sec);
-});
-document.getElementById('payCycleModal').style.display='block';
-}
-
-function closePayCycle(){ document.getElementById('payCycleModal').style.display='none'; }
-function updateDeductions(i,val){ workers[i].deductions=parseFloat(val)||0; openPayCycle(); }
-function togglePartial(i,checked){
- workers[i].partial=checked;
- if(!checked){
-  let days=workers[i].attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
-  workers[i].paid=workers[i].openingBalance+days*workers[i].rate-(workers[i].deductions||0);
- }
- openPayCycle();
-}
-function updatePaid(i,val){ workers[i].paid=parseFloat(val)||0; openPayCycle(); }
-
-async function finalizePayCycle(){
- let today=new Date(); let label=today.toDateString();
- let snapshot={ date:label, workers:JSON.parse(JSON.stringify(workers)) };
- let { error } = await supabase.from('payrollHistory').insert([snapshot]);
- if(error) console.error(error);
- workers.forEach(w=>{
-   let days=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
-   let total=w.openingBalance+days*w.rate-(w.deductions||0);
-   let paid=w.partial?w.paid:total;
-   w.carried=total-paid; w.openingBalance=w.carried; w.attendance=Array(7).fill('Absent');
-   w.deductions=0; w.partial=false; w.paid=0; w.totalOwed=0;
-   saveWorkerToDB(w);
+   if(!w.attendance) w.attendance = Array(7).fill('Absent');
+   let row=document.createElement('tr');
+   let daysHtml=w.attendance.map((s,d)=>`<td><button class="${s.toLowerCase()}" onclick="toggleAttendance(${i},${d})">${s}</button></td>`).join('');
+   let t=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
+   totalDays+=t;
+   row.innerHTML=`<td>${i+1}</td><td>${w.name}</td>${daysHtml}<td>${t}</td>`;
+   tbody.appendChild(row);
  });
- renderAttendance(); closePayCycle();
+ document.getElementById('totalDays').innerText='Total Days: '+totalDays.toFixed(1);
 }
 
-// --- PAYROLL REPORT ---
-function generatePayrollReport(){
- let reportDiv=document.getElementById('payCycleReport'); reportDiv.innerHTML='';
- let totalDays=0, manDays=0, totalWages=0;
- workers.forEach(w=>{
-   let worked=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
-   totalDays+=worked>0?1:0;
-   manDays+=worked;
-   let current=w.rate*worked; totalWages+=current;
-   reportDiv.innerHTML+=`<strong>${w.name}</strong>: Days Worked=${worked}, Current Wages=${current.toFixed(2)}<br>`;
- });
- reportDiv.innerHTML+=`<hr><strong>Job Summary</strong><br>Total Days (any worker): ${totalDays}<br>Man-Days (sum all workers): ${manDays}<br>Total Wages: ${totalWages.toFixed(2)}`;
+async function toggleAttendance(i,d){
+ const s=['Full','Half','Absent'];
+ workers[i].attendance[d]=s[(s.indexOf(workers[i].attendance[d])+1)%3];
+ await supabaseClient.from('workers').update({ attendance: workers[i].attendance }).eq('id', workers[i].id);
+ renderAttendance();
 }
-
-// --- RUNNING TOTALS ---
-function openRunningTotals(){
- let overview=document.getElementById('jobOverview'); let list=document.getElementById('workerTotals');
- overview.innerHTML=''; list.innerHTML='';
- let totalDays=0,totalWages=0,totalBalances=0;
- workers.forEach(w=>{ totalDays+=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0); totalWages+=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0)*w.rate; totalBalances+=w.openingBalance||0; });
- overview.innerHTML=`<h4>JOB OVERVIEW</h4>Total Days: ${totalDays}<br>Current Wages: ${totalWages.toFixed(2)}<br>Balances: ${totalBalances.toFixed(2)}<br>Grand Total: ${(totalWages+totalBalances).toFixed(2)}<hr>`;
- workers.forEach(w=>{
-  let daysWorked=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
-  let current=daysWorked*w.rate; let bal=w.openingBalance||0;
-  list.innerHTML+=`<strong>${w.name}</strong><br>Days: ${daysWorked}<br>Rate: ${w.rate}<br>Current: ${current.toFixed(2)}<br>Balance: ${bal.toFixed(2)}<hr>`;
- });
- document.getElementById('runningTotalsModal').style.display='block';
-}
-function closeRunningTotals(){ document.getElementById('runningTotalsModal').style.display='none'; }
-
-// --- ATTENDANCE HISTORY ---
-async function openAttendanceHistory(){
- let list=document.getElementById('attendanceHistoryList'); list.innerHTML='';
- let { data, error } = await supabase.from('attendanceHistory').select('*').order('week',{ascending:true});
- if(error) console.error(error);
- data.forEach(h=>{
-   list.innerHTML+=`<h4>Week ${new Date(h.week).toDateString()}</h4>`;
-   h.workers.forEach(w=>{ list.innerHTML+=`${w.name}: ${w.attendance.join(', ')}<br>`; });
-   list.innerHTML+='<hr>';
- });
- document.getElementById('attendanceHistoryModal').style.display='block';
-}
-function closeAttendanceHistory(){ document.getElementById('attendanceHistoryModal').style.display='none'; }
 
 // --- INIT ---
-window.onload=async function(){
-  await loadData();
-  await checkWeekRollover();
-  renderAttendance();
+window.onload = async function(){
+ await loadData();
 };
 </script>
 </body>
