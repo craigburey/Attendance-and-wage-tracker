@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Attendance & Payroll Tracker</title>
+<style>
+body { font-family: Arial; margin:0; padding:0; }
+header { background:#333; color:white; padding:10px; text-align:center; }
+button { margin:2px; padding:6px; font-size:14px; }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th,td { border:1px solid #ddd; padding:6px; text-align:center; }
+.full {background:#4CAF50;color:white;}
+.half {background:#FFC107;}
+.absent {background:#F44336;color:white;}
+.modal { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); overflow:auto; z-index:1000; }
+.modal-content { background:white; margin:0; padding:10px; width:100%; min-height:100%; box-sizing:border-box; }
+input, select { width:100%; padding:6px; margin:5px 0; font-size:14px; }
+h2,h3,h4 { margin:5px 0; }
+hr { margin:5px 0; border:1px solid #ccc; }
+.top-bar { display:flex; flex-wrap:wrap; justify-content:center; padding:5px; background:#eee; }
+.top-bar button { margin:5px; flex:1 1 40%; max-width:150px; }
+.worker-entry { border:1px solid #ccc; padding:5px; margin:3px 0; display:flex; justify-content:space-between; align-items:center; }
+</style>
+</head>
+<body>
+<header>
+<h2>Attendance & Payroll Tracker</h2>
+</header>
+<div class="top-bar">
+<button onclick="openWorkerModal()">Workers</button>
+<button onclick="openPayCycle()">Pay Cycle</button>
+<button onclick="openRunningTotals()">Running Totals</button>
+<button onclick="openAttendanceHistory()">Attendance History</button>
+<button onclick="openPayrollHistory()">Payroll History</button>
+</div>
+
+<!-- ATTENDANCE TABLE -->
+<table id="attendanceTable">
+<thead>
+<tr>
+<th>#</th><th>Name</th>
+<th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th><th>Sun</th>
+<th>Total</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+<div id="totalDays" style="padding:5px;font-weight:bold;"></div>
+
+<!-- WORKER MODAL -->
+<div id="workerModal" class="modal">
+<div class="modal-content">
+<h3>Workers</h3>
+<div id="workerList"></div>
+<hr>
+<h4>Add / Edit Worker</h4>
+<input id="workerName" placeholder="Worker Name">
+<select id="payType">
+<option value="daily">Daily</option>
+<option value="hourly">Hourly</option>
+</select>
+<input id="rate" type="number" placeholder="Rate">
+<input id="balance" type="number" placeholder="Opening Balance">
+<button onclick="saveWorker()">Save</button>
+<button onclick="closeWorkerModal()">Close</button>
+</div>
+</div>
+
+<!-- FULL-PAGE PAY CYCLE -->
+<div id="payCycleModal" class="modal">
+<div class="modal-content">
+<h3>Pay Cycle</h3>
+<div id="payCycleList"></div>
+<button onclick="finalizePayCycle()">Close Pay Cycle</button>
+<button onclick="closePayCycle()">Close</button>
+</div>
+</div>
+
+<!-- FULL-PAGE RUNNING TOTALS -->
+<div id="runningTotalsModal" class="modal">
+<div class="modal-content">
+<h3>Running Totals</h3>
+<div id="jobOverview"></div>
+<div id="workerTotals"></div>
+<button onclick="closeRunningTotals()">Close</button>
+</div>
+</div>
+
+<!-- FULL-PAGE ATTENDANCE HISTORY -->
+<div id="attendanceHistoryModal" class="modal">
+<div class="modal-content">
+<h3>Attendance History</h3>
+<div id="attendanceHistoryList"></div>
+<button onclick="closeAttendanceHistory()">Close</button>
+</div>
+</div>
+
+<!-- FULL-PAGE PAYROLL HISTORY -->
+<div id="payrollHistoryModal" class="modal">
+<div class="modal-content">
+<h3>Payroll History</h3>
+<select id="payrollSelect" onchange="loadPayrollReport()"></select>
+<div id="payrollReport"></div>
+<button onclick="closePayrollHistory()">Close</button>
+</div>
+</div>
+
+<script>
+// --- INITIALIZATION ---
+const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+let workers=[];
+let editIndex=null;
+
+// --- DATE HELPERS ---
+function getMonday(d){
+ let day=d.getDay();
+ let m=new Date(d);
+ m.setDate(d.getDate()-(day===0?6:day-1));
+ m.setHours(0,0,0,0);
+ return m;
+}
+
+// --- LOAD/SAVE ---
+function loadData(){ workers=JSON.parse(localStorage.getItem('workers')||'[]'); }
+function saveData(){ localStorage.setItem('workers',JSON.stringify(workers)); }
+
+// --- AUTO NEW WEEK ---
+function checkWeek(){
+ let storedWeek=localStorage.getItem('currentWeek');
+ let monday=getMonday(new Date()).toISOString();
+ if(storedWeek!==monday){
+  saveAttendanceHistory();
+  workers.forEach(w=>w.attendance=Array(7).fill('Absent'));
+  localStorage.setItem('currentWeek',monday);
+ }
+}
+
+// --- RENDER ATTENDANCE ---
+function renderAttendance(){
+ let tbody=document.querySelector('#attendanceTable tbody');
+ tbody.innerHTML='';
+ let totalDays=0;
+ workers.forEach((w,i)=>{
+  if(!w.attendance) w.attendance=Array(7).fill('Absent');
+  let row=document.createElement('tr');
+  let daysHtml=w.attendance.map((s,d)=>`<td><button class="${s.toLowerCase()}" onclick="toggleAttendance(${i},${d})">${s}</button></td>`).join('');
+  let t=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
+  totalDays+=t;
+  row.innerHTML=`<td>${i+1}</td><td>${w.name}</td>${daysHtml}<td>${t}</td>`;
+  tbody.appendChild(row);
+ });
+ document.getElementById('totalDays').innerText='Total Days: '+totalDays.toFixed(1);
+ saveData();
+}
+
+// --- ATTENDANCE TOGGLE ---
+function toggleAttendance(i,d){
+ const s=['Full','Half','Absent'];
+ workers[i].attendance[d]=s[(s.indexOf(workers[i].attendance[d])+1)%3];
+ renderAttendance();
+}
+
+// --- WORKER MODAL ---
+function openWorkerModal(){
+ editIndex=null;
+ document.getElementById('workerName').value='';
+ document.getElementById('payType').value='daily';
+ document.getElementById('rate').value='';
+ document.getElementById('balance').value='';
+ renderWorkerList();
+ document.getElementById('workerModal').style.display='block';
+}
+
+function renderWorkerList(){
+ let list=document.getElementById('workerList');
+ list.innerHTML='';
+ workers.forEach((w,i)=>{
+  let div=document.createElement('div'); div.className='worker-entry';
+  div.innerHTML=`<span>${w.name}</span>
+  <span>
+    <button onclick="editWorker(${i})">Edit</button>
+    <button onclick="deleteWorker(${i})">Delete</button>
+  </span>`;
+  list.appendChild(div);
+ });
+}
+
+function editWorker(i){
+ editIndex=i;
+ let w=workers[i];
+ document.getElementById('workerName').value=w.name;
+ document.getElementById('payType').value=w.payType;
+ document.getElementById('rate').value=w.rate;
+ document.getElementById('balance').value=w.openingBalance||0;
+}
+
+function closeWorkerModal(){ document.getElementById('workerModal').style.display='none'; }
+
+function saveWorker(){
+ let name=document.getElementById('workerName').value;
+ if(!name){ alert('Enter worker name'); return;}
+ let data={
+  name:name,
+  payType:document.getElementById('payType').value,
+  rate:parseFloat(document.getElementById('rate').value)||0,
+  openingBalance:parseFloat(document.getElementById('balance').value)||0,
+  attendance:Array(7).fill('Absent')
+ };
+ if(editIndex!==null){
+  data.attendance=workers[editIndex].attendance;
+  workers[editIndex]=data;
+ } else { workers.push(data); }
+ renderWorkerList(); renderAttendance();
+}
+
+// --- DELETE WORKER ---
+function deleteWorker(i){ if(confirm('Delete worker?')){ workers.splice(i,1); renderWorkerList(); renderAttendance(); } }
+
+// --- PAY CYCLE ---
+function openPayCycle(){
+ let div=document.getElementById('payCycleList'); div.innerHTML='';
+ workers.forEach((w,i)=>{
+  let daysWorked=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
+  let deductions=w.deductions||0;
+  let total=w.openingBalance+daysWorked*w.rate-deductions;
+  w.totalOwed=total; w.paid=w.partial?w.paid||0:total; w.carried=total-w.paid;
+  let sec=document.createElement('div');
+  sec.innerHTML=`
+  <h4>${w.name}</h4>
+  Days Worked: ${daysWorked}<br>
+  Rate: ${w.rate}<br>
+  Opening Balance: ${w.openingBalance.toFixed(2)}<br>
+  Deductions / Advances: <input type="number" value="${deductions}" onchange="updateDeductions(${i},this.value)"><br>
+  Total Owed: ${total.toFixed(2)}<br>
+  Partial Payment: <input type="checkbox" ${w.partial?'checked':''} onchange="togglePartial(${i},this.checked)"><br>
+  <div id="partialBox${i}" style="display:${w.partial?'block':'none'}">
+    Paid Amount: <input type="number" value="${w.paid}" onchange="updatePaid(${i},this.value)">
+  </div>
+  Carried Balance: ${w.carried.toFixed(2)}<hr>
+  `;
+  div.appendChild(sec);
+ });
+ document.getElementById('payCycleModal').style.display='block';
+}
+function closePayCycle(){ document.getElementById('payCycleModal').style.display='none'; }
+function updateDeductions(i,val){ workers[i].deductions=parseFloat(val)||0; openPayCycle(); }
+function togglePartial(i,checked){
+ workers[i].partial=checked;
+ if(!checked){
+  let days=workers[i].attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
+  workers[i].paid=workers[i].openingBalance+days*workers[i].rate-(workers[i].deductions||0);
+ }
+ openPayCycle();
+}
+function updatePaid(i,val){ workers[i].paid=parseFloat(val)||0; openPayCycle(); }
+function finalizePayCycle(){
+ let history=JSON.parse(localStorage.getItem('payrollHistory')||'[]');
+ let today=new Date(); let label=today.toDateString();
+ let snapshot={date:label,workers:JSON.parse(JSON.stringify(workers))};
+ workers.forEach(w=>{
+  let days=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
+  let total=w.openingBalance+days*w.rate-(w.deductions||0);
+  let paid=w.partial?w.paid:total; w.carried=total-paid;
+  w.openingBalance=w.carried; w.attendance=Array(7).fill('Absent'); w.deductions=0; w.partial=false; w.paid=0; w.totalOwed=0;
+ });
+ history.push(snapshot); localStorage.setItem('payrollHistory',JSON.stringify(history));
+ closePayCycle(); renderAttendance();
+}
+
+// --- RUNNING TOTALS ---
+function openRunningTotals(){
+ let overview=document.getElementById('jobOverview'); let list=document.getElementById('workerTotals');
+ overview.innerHTML=''; list.innerHTML='';
+ let totalDays=0,totalWages=0,totalBalances=0;
+ workers.forEach(w=>{ totalDays+=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0); totalWages+=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0)*w.rate; totalBalances+=w.openingBalance||0; });
+ overview.innerHTML=`<h4>JOB OVERVIEW</h4>Total Days: ${totalDays}<br>Current Wages: ${totalWages.toFixed(2)}<br>Balances: ${totalBalances.toFixed(2)}<br>Grand Total: ${(totalWages+totalBalances).toFixed(2)}<hr>`;
+ workers.forEach(w=>{
+  let daysWorked=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
+  let current=daysWorked*w.rate; let bal=w.openingBalance||0;
+  list.innerHTML+=`<strong>${w.name}</strong><br>Days: ${daysWorked}<br>Rate: ${w.rate}<br>Current: ${current.toFixed(2)}<br>Balance: ${bal.toFixed(2)}<hr>`;
+ });
+ document.getElementById('runningTotalsModal').style.display='block';
+}
+function closeRunningTotals(){ document.getElementById('runningTotalsModal').style.display='none'; }
+
+// --- ATTENDANCE HISTORY ---
+function saveAttendanceHistory(){
+ let hist=JSON.parse(localStorage.getItem('attendanceHistory')||'[]');
+ hist.push({week:getMonday(new Date()).toISOString(),workers:JSON.parse(JSON.stringify(workers))});
+ localStorage.setItem('attendanceHistory',JSON.stringify(hist));
+}
+function openAttendanceHistory(){
+ let list=document.getElementById('attendanceHistoryList'); list.innerHTML='';
+ let hist=JSON.parse(localStorage.getItem('attendanceHistory')||'[]');
+ let currentWeek=getMonday(new Date()).toISOString();
+ hist.forEach(h=>{
+  let color=h.week===currentWeek?'red':'black';
+  list.innerHTML+=`<h4 style="color:${color}">Week ${new Date(h.week).toDateString()}</h4>`;
+  h.workers.forEach(w=>{ list.innerHTML+=`${w.name}: ${w.attendance.join(', ')}<br>`; });
+  list.innerHTML+='<hr>';
+ });
+ document.getElementById('attendanceHistoryModal').style.display='block';
+}
+function closeAttendanceHistory(){ document.getElementById('attendanceHistoryModal').style.display='none'; }
+
+// --- PAYROLL HISTORY ---
+function openPayrollHistory(){
+ let history=JSON.parse(localStorage.getItem('payrollHistory')||'[]');
+ let select=document.getElementById('payrollSelect'); select.innerHTML='';
+ history.forEach((h,i)=>{ let opt=document.createElement('option'); opt.value=i; opt.text=h.date; select.appendChild(opt); });
+ document.getElementById('payrollHistoryModal').style.display='block';
+ if(history.length>0){ select.value=history.length-1; loadPayrollReport(); }
+}
+function loadPayrollReport(){
+ let history=JSON.parse(localStorage.getItem('payrollHistory')||'[]');
+ let index=document.getElementById('payrollSelect').value;
+ if(!history[index]) return;
+ let report=document.getElementById('payrollReport'); report.innerHTML='';
+ let totalDays=0,totalWages=0,totalBalances=0;
+ history[index].workers.forEach(w=>{ totalDays+=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0); totalWages+=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0)*w.rate; totalBalances+=w.openingBalance||0; });
+ report.innerHTML=`<h4>PAYROLL SUMMARY</h4>Total Days: ${totalDays}<br>Total Wages: ${totalWages.toFixed(2)}<br>Total Balances: ${totalBalances.toFixed(2)}<hr>`;
+ history[index].workers.forEach(w=>{
+  let daysWorked=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
+  let current=daysWorked*w.rate; let bal=w.openingBalance||0;
+  report.innerHTML+=`<strong>${w.name}</strong><br>Days Worked: ${daysWorked}<br>Rate: ${w.rate}<br>Opening Balance: ${bal.toFixed(2)}<br>Current: ${current.toFixed(2)}<hr>`;
+ });
+}
+function closePayrollHistory(){ document.getElementById('payrollHistoryModal').style.display='none'; }
+
+// --- INIT ---
+window.onload=function(){ loadData(); checkWeek(); renderAttendance(); };
+</script>
+</body>
+</html>
