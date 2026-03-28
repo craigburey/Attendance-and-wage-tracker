@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Attendance & Payroll Tracker</title>
+<title>Attendance Tracker</title>
 <style>
 body { font-family: Arial; margin:0; padding:0; }
 header { background:#333; color:white; padding:10px; text-align:center; }
@@ -15,27 +15,17 @@ th,td { border:1px solid #ddd; padding:6px; text-align:center; }
 .modal { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); overflow:auto; z-index:1000; }
 .modal-content { background:white; margin:0; padding:10px; width:100%; min-height:100%; box-sizing:border-box; }
 input, select { width:100%; padding:6px; margin:5px 0; font-size:14px; }
-h2,h3,h4 { margin:5px 0; }
-hr { margin:5px 0; border:1px solid #ccc; }
-.top-bar { display:flex; flex-wrap:wrap; justify-content:center; padding:5px; background:#eee; }
-.top-bar button { margin:5px; flex:1 1 40%; max-width:150px; }
 .worker-entry { border:1px solid #ccc; padding:5px; margin:3px 0; display:flex; justify-content:space-between; align-items:center; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
-<header>
-<h2>Attendance & Payroll Tracker</h2>
-</header>
-<div class="top-bar">
-<button onclick="openWorkerModal()">Workers</button>
-<button onclick="openPayCycle()">Pay Cycle</button>
-<button onclick="openRunningTotals()">Running Totals</button>
-<button onclick="openAttendanceHistory()">Attendance History</button>
-<button onclick="openPayrollHistory()">Payroll History</button>
-</div>
 
-<!-- ATTENDANCE TABLE -->
+<header>
+<h2>Attendance Tracker</h2>
+<button onclick="openWorkerModal()">Manage Workers</button>
+</header>
+
 <table id="attendanceTable">
 <thead>
 <tr>
@@ -46,15 +36,12 @@ hr { margin:5px 0; border:1px solid #ccc; }
 </thead>
 <tbody></tbody>
 </table>
-<div id="totalDays" style="padding:5px;font-weight:bold;"></div>
 
-<!-- WORKER MODAL -->
 <div id="workerModal" class="modal">
 <div class="modal-content">
 <h3>Workers</h3>
 <div id="workerList"></div>
 <hr>
-<h4>Add / Edit Worker</h4>
 <input id="workerName" placeholder="Worker Name">
 <select id="payType">
 <option value="daily">Daily</option>
@@ -67,166 +54,116 @@ hr { margin:5px 0; border:1px solid #ccc; }
 </div>
 </div>
 
-<!-- PAY CYCLE -->
-<div id="payCycleModal" class="modal">
-<div class="modal-content">
-<h3>Pay Cycle</h3>
-<div id="payCycleList"></div>
-<button onclick="finalizePayCycle()">Close Pay Cycle</button>
-<button onclick="closePayCycle()">Close</button>
-</div>
-</div>
-
-<!-- RUNNING TOTALS -->
-<div id="runningTotalsModal" class="modal">
-<div class="modal-content">
-<h3>Running Totals</h3>
-<div id="jobOverview"></div>
-<div id="workerTotals"></div>
-<button onclick="closeRunningTotals()">Close</button>
-</div>
-</div>
-
-<!-- ATTENDANCE HISTORY -->
-<div id="attendanceHistoryModal" class="modal">
-<div class="modal-content">
-<h3>Attendance History</h3>
-<div id="attendanceHistoryList"></div>
-<button onclick="closeAttendanceHistory()">Close</button>
-</div>
-</div>
-
-<!-- PAYROLL HISTORY -->
-<div id="payrollHistoryModal" class="modal">
-<div class="modal-content">
-<h3>Payroll History</h3>
-<select id="payrollSelect" onchange="loadPayrollReport()"></select>
-<div id="payrollReport"></div>
-<button onclick="closePayrollHistory()">Close</button>
-</div>
-</div>
-
 <script>
 const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 let workers=[];
 let editIndex=null;
 
-// --- SUPABASE INIT ---
+// --- SUPABASE ---
 const supabaseUrl = 'https://bjuqcpbpujqzdqffrgxi.supabase.co';
 const supabaseKey = 'sb_publishable_e6fj_76zFVKYOcwFvyjzNw_5_52Gyc4';
-const supabaseClient = supabase.createClient(supabaseUrl, supabaseKey);
+const supabase = supabase.createClient(supabaseUrl, supabaseKey);
 
-// --- DATE HELPERS ---
-function getMonday(d){
- let day=d.getDay();
- let m=new Date(d);
- m.setDate(d.getDate()-(day===0?6:day-1));
- m.setHours(0,0,0,0);
- return m;
+// --- LOAD WORKERS ---
+async function loadWorkers(){
+  let { data, error } = await supabase.from('workers').select('*').order('id');
+  if(error){ console.error(error); return; }
+  workers = data.map(w=>({ ...w, attendance: w.attendance || Array(7).fill('Absent') }));
+  renderAttendance();
+  renderWorkerList();
 }
 
-// --- LOAD DATA ---
-async function loadData(){
- let { data, error } = await supabaseClient.from('workers').select('*');
- if (error) { console.error(error); return; }
- workers = data.map(w=>({
-   ...w,
-   attendance: w.attendance || Array(7).fill('Absent')
- }));
- renderAttendance();
+// --- RENDER ATTENDANCE ---
+function renderAttendance(){
+  let tbody=document.querySelector('#attendanceTable tbody');
+  tbody.innerHTML='';
+  workers.forEach((w,i)=>{
+    let row=document.createElement('tr');
+    let daysHtml = w.attendance.map((s,d)=>`<td><button class="${s.toLowerCase()}" onclick="toggleAttendance(${i},${d})">${s}</button></td>`).join('');
+    let total = w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
+    row.innerHTML=`<td>${i+1}</td><td>${w.name}</td>${daysHtml}<td>${total}</td>`;
+    tbody.appendChild(row);
+  });
+}
+
+// --- TOGGLE ATTENDANCE ---
+async function toggleAttendance(i,d){
+  const status=['Full','Half','Absent'];
+  workers[i].attendance[d] = status[(status.indexOf(workers[i].attendance[d])+1)%3];
+  await supabase.from('workers').update({ attendance: workers[i].attendance }).eq('id', workers[i].id);
+  renderAttendance();
+}
+
+// --- WORKER MODAL ---
+function openWorkerModal(){
+  editIndex=null;
+  document.getElementById('workerName').value='';
+  document.getElementById('payType').value='daily';
+  document.getElementById('rate').value='';
+  document.getElementById('balance').value='';
+  document.getElementById('workerModal').style.display='block';
+}
+
+function closeWorkerModal(){ document.getElementById('workerModal').style.display='none'; }
+
+function renderWorkerList(){
+  let list=document.getElementById('workerList'); list.innerHTML='';
+  workers.forEach((w,i)=>{
+    let div=document.createElement('div'); div.className='worker-entry';
+    div.innerHTML=`<span>${w.name}</span><span>
+      <button onclick="editWorker(${i})">Edit</button>
+      <button onclick="deleteWorker(${i})">Delete</button>
+    </span>`;
+    list.appendChild(div);
+  });
+}
+
+function editWorker(i){
+  editIndex=i;
+  let w=workers[i];
+  document.getElementById('workerName').value=w.name;
+  document.getElementById('payType').value=w.payType;
+  document.getElementById('rate').value=w.rate;
+  document.getElementById('balance').value=w.openingBalance;
 }
 
 // --- SAVE WORKER ---
 async function saveWorker(){
- let name = document.getElementById('workerName').value;
- if(!name){ alert('Enter worker name'); return; }
- let payType = document.getElementById('payType').value;
- let rate = parseFloat(document.getElementById('rate').value) || 0;
- let openingBalance = parseFloat(document.getElementById('balance').value) || 0;
-
- if(editIndex!==null){
-   let worker = workers[editIndex];
-   let { error } = await supabaseClient.from('workers')
-       .update({ name, payType, rate, openingBalance })
-       .eq('id', worker.id);
-   if(error){ console.error(error); return; }
-   workers[editIndex] = {...worker, name, payType, rate, openingBalance};
- } else {
-   let { data, error } = await supabaseClient.from('workers')
-       .insert([{ name, payType, rate, openingBalance, attendance: Array(7).fill('Absent') }])
-       .select();
-   if(error){ console.error(error); return; }
-   workers.push(data[0]);
- }
-
- renderWorkerList();
- renderAttendance();
+  let name=document.getElementById('workerName').value;
+  let payType=document.getElementById('payType').value;
+  let rate=parseFloat(document.getElementById('rate').value)||0;
+  let balance=parseFloat(document.getElementById('balance').value)||0;
+  
+  if(!name){ alert('Enter worker name'); return; }
+  
+  if(editIndex!==null){
+    let w=workers[editIndex];
+    let { error } = await supabase.from('workers').update({ name, payType, rate, openingBalance: balance }).eq('id', w.id);
+    if(error){ console.error(error); return; }
+    workers[editIndex]={ ...w, name, payType, rate, openingBalance: balance };
+  } else {
+    let { data, error } = await supabase.from('workers').insert([{ name, payType, rate, openingBalance: balance, attendance: Array(7).fill('Absent') }]).select();
+    if(error){ console.error(error); return; }
+    workers.push(data[0]);
+  }
+  
+  renderWorkerList();
+  renderAttendance();
+  closeWorkerModal();
 }
 
-// --- RENDER WORKERS ---
-function renderWorkerList(){
- let list=document.getElementById('workerList'); list.innerHTML='';
- workers.forEach((w,i)=>{
-   let div=document.createElement('div'); div.className='worker-entry';
-   div.innerHTML = `<span>${w.name}</span>
-   <span>
-     <button onclick="editWorker(${i})">Edit</button>
-     <button onclick="deleteWorker(${i})">Delete</button>
-   </span>`;
-   list.appendChild(div);
- });
-}
-
-function editWorker(i){
- editIndex=i;
- let w=workers[i];
- document.getElementById('workerName').value=w.name;
- document.getElementById('payType').value=w.payType;
- document.getElementById('rate').value=w.rate;
- document.getElementById('balance').value=w.openingBalance||0;
-}
-
+// --- DELETE WORKER ---
 async function deleteWorker(i){
- if(confirm('Delete worker?')){
-   let worker = workers[i];
-   let { error } = await supabaseClient.from('workers').delete().eq('id', worker.id);
-   if(error){ console.error(error); return; }
-   workers.splice(i,1);
-   renderWorkerList();
-   renderAttendance();
- }
-}
-
-function closeWorkerModal(){ document.getElementById('workerModal').style.display='none'; }
-function openWorkerModal(){ editIndex=null; document.getElementById('workerName').value=''; document.getElementById('payType').value='daily'; document.getElementById('rate').value=''; document.getElementById('balance').value=''; renderWorkerList(); document.getElementById('workerModal').style.display='block'; }
-
-// --- ATTENDANCE ---
-function renderAttendance(){
- let tbody=document.querySelector('#attendanceTable tbody');
- tbody.innerHTML=''; let totalDays=0;
- workers.forEach((w,i)=>{
-   if(!w.attendance) w.attendance = Array(7).fill('Absent');
-   let row=document.createElement('tr');
-   let daysHtml=w.attendance.map((s,d)=>`<td><button class="${s.toLowerCase()}" onclick="toggleAttendance(${i},${d})">${s}</button></td>`).join('');
-   let t=w.attendance.reduce((a,s)=>a+(s==='Full'?1:s==='Half'?0.5:0),0);
-   totalDays+=t;
-   row.innerHTML=`<td>${i+1}</td><td>${w.name}</td>${daysHtml}<td>${t}</td>`;
-   tbody.appendChild(row);
- });
- document.getElementById('totalDays').innerText='Total Days: '+totalDays.toFixed(1);
-}
-
-async function toggleAttendance(i,d){
- const s=['Full','Half','Absent'];
- workers[i].attendance[d]=s[(s.indexOf(workers[i].attendance[d])+1)%3];
- await supabaseClient.from('workers').update({ attendance: workers[i].attendance }).eq('id', workers[i].id);
- renderAttendance();
+  if(!confirm('Delete worker?')) return;
+  let { error } = await supabase.from('workers').delete().eq('id', workers[i].id);
+  if(error){ console.error(error); return; }
+  workers.splice(i,1);
+  renderWorkerList();
+  renderAttendance();
 }
 
 // --- INIT ---
-window.onload = async function(){
- await loadData();
-};
+window.onload = async function(){ await loadWorkers(); };
 </script>
 </body>
 </html>
